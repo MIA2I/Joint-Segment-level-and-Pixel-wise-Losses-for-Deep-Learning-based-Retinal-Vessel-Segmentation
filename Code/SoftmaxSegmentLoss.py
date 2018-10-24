@@ -5,7 +5,96 @@ import caffe
 import bwmorph as bw
 import numpy as np
 from numpy import linalg as LA
+
+class WeightedSoftmaxLossLayer(caffe.Layer):
+    """
+    Compute the Softmax Loss in the same manner but use the skeletal loss as weights
+    """
+    def setup(self, bottom, top):
+        # check input pair
+        if len(bottom) != 2:
+            raise Exception("Need 2 inputs to compute distance.")
  
+    def reshape(self, bottom, top):
+        # check input dimensions match
+        if bottom[0].num != bottom[1].num:
+            raise Exception("Inputs must have the same dimension.")
+        # difference is shape of inputs
+        self.diff = np.zeros_like(bottom[0].data, dtype=np.float32)
+        # weights matrix
+        self.mask = np.zeros_like(bottom[0].data, dtype=np.float32)
+        # loss output is scalar
+        top[0].reshape(1)
+ 
+    def forward(self, bottom, top):        
+        
+        # run softmax() layer 
+        score = np.copy(bottom[0].data)
+        
+        temp = np.maximum(score[0,0,:,:], score[0,1,:,:])
+        score[0,0,:,:] -= temp
+        score[0,1,:,:] -= temp
+        
+        prob = np.exp(score)
+        
+        temp = prob[0,0,:,:] + prob[0,1,:,:]
+        prob[0,0,:,:] /= temp
+        prob[0,1,:,:] /= temp
+        
+        # read the label matrix
+        label = np.copy(bottom[1].data)
+	
+	# generate pixel-wise matrix
+	# assign wights to different labels to deal with the imbalance problem: 
+	#							0.1 for 0 (non-vessel)
+	#							0.9 for 1 (vessel)
+        temp = np.copy(label)
+        temp[...] = 0
+        temp[np.where(label==0)] = 0.1
+        temp[np.where(label==255)] = 0
+        self.mask[0,0,:,:] = np.copy(temp)
+        temp[...] = 0
+        temp[np.where(label>0)] = 0.9
+        temp[np.where(label==255)] = 0
+        self.mask[0,1,:,:] = np.copy(temp)
+        count = np.count_nonzero(self.mask)
+
+        weights = np.copy(self.mask)
+        
+        # calculate loss
+        probs = np.copy(prob)
+        probs[np.where(probs<1.175494e-38)] = 1.175494e-38
+        logprob = -np.log(probs)
+        
+        data_loss = np.sum(weights*logprob) *1.0 / count
+        
+        self.diff[...] = np.copy(prob)
+        
+        top[0].data[...] = np.copy(data_loss)
+ 
+    def backward(self, top, propagate_down, bottom):
+        
+        delta = np.copy(self.diff[...])
+        
+        count = np.count_nonzero(self.mask)
+        
+        delta[np.where(self.mask>0)] -= 1
+        
+        # generate pixel-wise matrix
+        label = np.copy(bottom[1].data)
+        weights = np.copy(bottom[0].data)
+        temp = np.copy(label)
+        temp[...] = 0
+        temp[np.where(label==0)] = 0.1
+        temp[np.where(label>0)] = 0.9
+        temp[np.where(label==255)] = 0
+        weights[0,0,:,:] = np.copy(temp)
+        weights[0,1,:,:] = np.copy(temp)
+        
+        delta *= weights
+        bottom[0].diff[...] = delta * 1.0 / count
+
+
 class SoftmaxSegmentLossLayer(caffe.Layer):
     """
     Compute the Softmax Loss in the same manner but use the skeletal loss as weights
@@ -135,6 +224,7 @@ class SoftmaxSegmentLossLayer(caffe.Layer):
         Similarity[np.where(outlier>0)] = 0
         
         image = np.copy(prob[0,1,:,:])
+
 	# For the i-th segment in IDMask (segment index starts from 1):
 	#			-i: the pixel values of the skeleton segment
 	#			i: the searching range of the i-th segment

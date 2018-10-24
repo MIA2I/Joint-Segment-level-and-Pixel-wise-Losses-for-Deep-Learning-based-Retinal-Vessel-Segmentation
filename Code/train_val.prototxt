@@ -901,15 +901,13 @@ layer {
 
 layer {
   name: "loss-2"
-  type: "LamdaSoftmaxWithLoss"
+  type: "Python"
   bottom: "score-2"
   bottom: "label"
   top: "loss-2"
-  loss_param {
-    ignore_label: 255
-    normalize: true
+  python_param {
+    module: "SoftmaxSegmentLoss"
+    layer: "WeightedSoftmaxLossLayer"
   }
-  softmax_param {
-    lamda: 0.1
-  }
+  loss_weight: 1
 }
